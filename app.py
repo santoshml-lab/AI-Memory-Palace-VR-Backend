@@ -1,15 +1,20 @@
-from fastapi import FastAPI
+import json
+import os
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from groq import Groq
 
 
 app = FastAPI(
     title="AI Memory Palace Backend",
-    version="1.1.0"
+    version="2.0.0"
 )
 
 
-# Allow the VR frontend to communicate with the backend.
+# ---------- CORS ----------
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,6 +22,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---------- GROQ CLIENT ----------
+
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+
+if GROQ_API_KEY:
+    groq_client = Groq(api_key=GROQ_API_KEY)
+else:
+    groq_client = None
 
 
 # ---------- MODELS ----------
@@ -40,7 +55,8 @@ def root():
 @app.get("/health")
 def health():
     return {
-        "status": "healthy"
+        "status": "healthy",
+        "ai_configured": groq_client is not None
     }
 
 
@@ -52,38 +68,88 @@ def generate_concepts(request: ConceptRequest):
     topic = request.topic.strip()
 
     if not topic:
+        raise HTTPException(
+            status_code=400,
+            detail="Topic is required"
+        )
+
+    if groq_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail="GROQ_API_KEY is not configured"
+        )
+
+    prompt = f"""
+You are the AI learning planner for an immersive VR Memory Palace.
+
+The learner wants to learn this topic:
+
+{topic}
+
+Break the topic into exactly 5 important concepts.
+
+The concepts should:
+- be educationally meaningful
+- be easy to represent as separate 3D objects
+- follow a logical learning order
+- help the learner remember the topic
+- avoid unnecessary details
+
+Return JSON only in this structure:
+
+{{
+  "concepts": [
+    {{
+      "name": "Concept name",
+      "description": "Short explanation",
+      "memory_hint": "A memorable visual or spatial idea"
+    }}
+  ]
+}}
+"""
+
+    try:
+
+        response = groq_client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You create concise educational concepts "
+                        "for an immersive VR memory palace."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            response_format={
+                "type": "json_object"
+            },
+            temperature=0.3,
+            max_completion_tokens=1200
+        )
+
+        content = response.choices[0].message.content
+
+        data = json.loads(content)
+
         return {
-            "status": "error",
-            "message": "Topic is required"
+            "status": "success",
+            "topic": topic,
+            "concepts": data["concepts"]
         }
 
-    # Temporary concept generation.
-    # The LLM will be connected in the next step.
-    concepts = [
-        {
-            "name": f"{topic} - Core Idea",
-            "description": f"The central idea of {topic}."
-        },
-        {
-            "name": f"{topic} - Key Concept 1",
-            "description": f"An important concept related to {topic}."
-        },
-        {
-            "name": f"{topic} - Key Concept 2",
-            "description": f"Another important concept related to {topic}."
-        },
-        {
-            "name": f"{topic} - Process",
-            "description": f"The main process or mechanism involved in {topic}."
-        },
-        {
-            "name": f"{topic} - Application",
-            "description": f"A practical application of {topic}."
-        }
-    ]
+    except Exception as error:
 
-    return {
-        "status": "success",
-        "topic": topic,
-        "concepts": concepts
-    }
+        print(
+            "Concept generation error:",
+            str(error)
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="AI concept generation failed"
+        )
