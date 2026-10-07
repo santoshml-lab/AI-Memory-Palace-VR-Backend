@@ -153,3 +153,111 @@ Return JSON only in this structure:
             status_code=500,
             detail="AI concept generation failed"
         )
+
+# ---------- ADAPTIVE REVISION ----------
+
+class RevisionRequest(BaseModel):
+    topic: str
+    weak_concepts: list[str]
+
+
+@app.post("/generate-revision")
+def generate_revision(request: RevisionRequest):
+
+    topic = request.topic.strip()
+    weak_concepts = request.weak_concepts
+
+    if not topic:
+        raise HTTPException(
+            status_code=400,
+            detail="Topic is required"
+        )
+
+    if not weak_concepts:
+        raise HTTPException(
+            status_code=400,
+            detail="Weak concepts are required"
+        )
+
+    if groq_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail="GROQ_API_KEY is not configured"
+        )
+
+    prompt = f"""
+You are an adaptive AI tutor inside an immersive VR Memory Palace.
+
+Topic:
+{topic}
+
+The learner struggled with these concepts:
+{json.dumps(weak_concepts)}
+
+Create a short targeted revision for ONLY these weak concepts.
+
+Return JSON only in this structure:
+
+{{
+  "revision": [
+    {{
+      "concept": "Concept name",
+      "explanation": "Very short and clear explanation",
+      "memory_hint": "A memorable visual or spatial memory hint",
+      "challenge": "A short recall question"
+    }}
+  ]
+}}
+
+Rules:
+- Focus only on the weak concepts.
+- Keep explanations concise.
+- Make the memory hints suitable for 3D spatial learning.
+- Make challenges suitable for a VR recall activity.
+"""
+
+    try:
+
+        response = groq_client.chat.completions.create(
+            model="openai/gpt-oss-20b",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an adaptive AI tutor "
+                        "for an immersive VR learning system."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            response_format={
+                "type": "json_object"
+            },
+            temperature=0.3,
+            max_completion_tokens=1000
+        )
+
+        content = response.choices[0].message.content
+
+        data = json.loads(content)
+
+        return {
+            "status": "success",
+            "topic": topic,
+            "revision": data["revision"]
+        }
+
+    except Exception as error:
+
+        print(
+            "Revision generation error:",
+            str(error)
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="AI revision generation failed"
+        )
